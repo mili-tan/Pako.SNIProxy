@@ -212,32 +212,74 @@ nft add rule ip nat output tcp dport 443 redirect to :8443
 
 > Note: the proxy's listen port must match the redirect target. If the proxy listens on 443 directly, no redirect is needed (requires root).
 
-## Performance & Memory Tuning (incl. 1C1G VPS)
+## Performance & Memory Tuning
 
-Defaults are conservative, tuned for low-spec VPS. Memory mainly comes from: per-connection relay buffers, the DNS cache, traffic counters, and SQLite.
+Defaults are conservative and tuned for a low-spec VPS. Runtime memory mainly comes from four sources: per-connection relay buffers, the DNS cache, traffic counters, and SQLite.
 
-| Concern | Default | Notes / Recommendation |
-|---------|---------|------------------------|
-| Per-connection buffer | `BufferSizeBytes=16384` | ~`2 × BufferSizeBytes` per connection. Raise to 32768/65536 for throughput, at the cost of memory |
-| Max connections | `MaxTotal=1000` | ≤1000 recommended for 1C1G; each connection also uses 2 sockets and an idle watchdog timer |
+| Concern | Default | Notes |
+|---------|---------|-------|
+| Per-connection buffer | `BufferSizeBytes=16384` | ~`2 × BufferSizeBytes` per connection (one buffer per direction). Raise to 32768/65536 for throughput, at the cost of memory |
+| Max connections | `MaxTotal=1000` | Each connection also uses 2 sockets + an idle watchdog timer |
 | Per-IP connections | `MaxPerClientIp=50` | Prevents a single client from exhausting resources |
 | DNS cache | `DnsCacheMaxEntries=10000` | Bounded; evicted by expiry when exceeded — no unbounded growth |
 | Traffic counters | Auto-eviction | Client counters idle for >1h are removed from memory after flushing |
-| SQLite | WAL + periodic checkpoint | `wal_checkpoint(TRUNCATE)` every 10 min plus cleanup of records older than 60 days, bounding disk and memory |
+| SQLite | WAL + periodic checkpoint | `wal_checkpoint(TRUNCATE)` every 10 min + cleanup of records older than 60 days |
 
-**Recommended settings for 1C1G:**
+**Memory rule of thumb:**
+
+```
+buffer memory ≈ MaxTotal × 2 × BufferSizeBytes
+```
+
+On top of that, budget ~80–120 MB for the .NET runtime, the DNS cache, and SQLite. Use the sum to size `MemoryMax`.
+
+### Recommended presets
+
+| Spec | MaxPerClientIp | MaxTotal | BufferSizeBytes | Backlog | DnsCacheMaxEntries | systemd `MemoryMax` |
+|------|---------------|----------|-----------------|---------|--------------------|---------------------|
+| **1C1G** | 30 | 500 | 16384 | 512 | 5000 | 512M |
+| **2C2G** | 50 | 1500 | 32768 | 1024 | 10000 | 1G |
+| **2C4G+** | 100 | 5000 | 65536 | 2048 | 50000 | 2G |
+
+<details>
+<summary><b>1C1G</b> — 1 CPU / 1 GB</summary>
 
 ```jsonc
-"ConnectionLimit": { "Enabled": true, "MaxPerClientIp": 30, "MaxTotal": 500 },
-"Connection":      { "BufferSizeBytes": 16384, "Backlog": 512 },
+"ConnectionLimit":    { "Enabled": true, "MaxPerClientIp": 30,  "MaxTotal": 500 },
+"Connection":         { "BufferSizeBytes": 16384, "Backlog": 512 },
 "DnsCacheMaxEntries": 5000
 ```
 
+</details>
+
+<details>
+<summary><b>2C2G</b> — 2 CPU / 2 GB</summary>
+
+```jsonc
+"ConnectionLimit":    { "Enabled": true, "MaxPerClientIp": 50,  "MaxTotal": 1500 },
+"Connection":         { "BufferSizeBytes": 32768, "Backlog": 1024 },
+"DnsCacheMaxEntries": 10000
+```
+
+</details>
+
+<details>
+<summary><b>2C4G+</b> — 2+ CPU / 4 GB+</summary>
+
+```jsonc
+"ConnectionLimit":    { "Enabled": true, "MaxPerClientIp": 100, "MaxTotal": 5000 },
+"Connection":         { "BufferSizeBytes": 65536, "Backlog": 2048 },
+"DnsCacheMaxEntries": 50000
+```
+
+</details>
+
 Additional tips:
 
-- Manage the process with systemd and set `MemoryMax` (e.g. `MemoryMax=512M`) as a safety net
+- Manage the process with systemd and set `MemoryMax` as a safety net (see presets above)
 - Keep `IdleTimeoutMs` reasonable to reclaim idle connections promptly
 - Keep the log level at `Information`; avoid enabling `Debug` on the hot path
+- The relay is async/I-O bound, so extra cores help mainly under very high connection counts
 
 ## Security Recommendations
 

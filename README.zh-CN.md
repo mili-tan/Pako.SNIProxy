@@ -211,32 +211,74 @@ nft add rule ip nat output tcp dport 443 redirect to :8443
 
 > 注意：代理监听端口需与重定向目标一致；若代理直接监听 443 则无需重定向（需 root）。
 
-## 性能与内存调优（含 1C1G VPS）
+## 性能与内存调优
 
-默认值已针对低配 VPS 做了保守设置。内存主要来自：每连接转发缓冲区、DNS 缓存、流量计数器、SQLite。
+默认值已针对低配 VPS 做了保守设置。运行时内存主要来自四个来源：每连接转发缓冲区、DNS 缓存、流量计数器、SQLite。
 
-| 关注点 | 默认 | 说明 / 建议 |
-|--------|------|-------------|
-| 每连接缓冲区 | `BufferSizeBytes=16384` | 每连接约 `2 × BufferSizeBytes`。提高吞吐可调到 32768/65536，但内存随之上升 |
-| 最大连接数 | `MaxTotal=1000` | 1C1G 建议 ≤1000；每连接还占用 2 个 socket 与一个空闲看门狗定时器 |
+| 关注点 | 默认 | 说明 |
+|--------|------|------|
+| 每连接缓冲区 | `BufferSizeBytes=16384` | 每连接约 `2 × BufferSizeBytes`（每个方向一个缓冲区）。提高吞吐可调到 32768/65536，但内存随之上升 |
+| 最大连接数 | `MaxTotal=1000` | 每连接还占用 2 个 socket + 一个空闲看门狗定时器 |
 | 单 IP 连接数 | `MaxPerClientIp=50` | 防止单客户端耗尽资源 |
 | DNS 缓存 | `DnsCacheMaxEntries=10000` | 有界，超出按过期时间淘汰，避免无限增长 |
 | 流量计数器 | 自动淘汰 | 空闲超过 1 小时的客户端计数器在刷盘后从内存移除 |
-| SQLite | WAL + 定期 checkpoint | 每 10 分钟 `wal_checkpoint(TRUNCATE)` 并清理 60 天前记录，控制磁盘与内存 |
+| SQLite | WAL + 定期 checkpoint | 每 10 分钟 `wal_checkpoint(TRUNCATE)` 并清理 60 天前记录 |
 
-**1C1G 推荐配置**：
+**内存估算经验公式：**
+
+```
+缓冲区内存 ≈ MaxTotal × 2 × BufferSizeBytes
+```
+
+此外还需为 .NET 运行时、DNS 缓存与 SQLite 预留约 80–120 MB。用两者之和来设置 `MemoryMax`。
+
+### 推荐配置参考
+
+| 规格 | MaxPerClientIp | MaxTotal | BufferSizeBytes | Backlog | DnsCacheMaxEntries | systemd `MemoryMax` |
+|------|---------------|----------|-----------------|---------|--------------------|---------------------|
+| **1C1G** | 30 | 500 | 16384 | 512 | 5000 | 512M |
+| **2C2G** | 50 | 1500 | 32768 | 1024 | 10000 | 1G |
+| **2C4G+** | 100 | 5000 | 65536 | 2048 | 50000 | 2G |
+
+<details>
+<summary><b>1C1G</b> — 1 核 / 1 GB</summary>
 
 ```jsonc
-"ConnectionLimit": { "Enabled": true, "MaxPerClientIp": 30, "MaxTotal": 500 },
-"Connection":      { "BufferSizeBytes": 16384, "Backlog": 512 },
+"ConnectionLimit":    { "Enabled": true, "MaxPerClientIp": 30,  "MaxTotal": 500 },
+"Connection":         { "BufferSizeBytes": 16384, "Backlog": 512 },
 "DnsCacheMaxEntries": 5000
 ```
 
+</details>
+
+<details>
+<summary><b>2C2G</b> — 2 核 / 2 GB</summary>
+
+```jsonc
+"ConnectionLimit":    { "Enabled": true, "MaxPerClientIp": 50,  "MaxTotal": 1500 },
+"Connection":         { "BufferSizeBytes": 32768, "Backlog": 1024 },
+"DnsCacheMaxEntries": 10000
+```
+
+</details>
+
+<details>
+<summary><b>2C4G+</b> — 2 核以上 / 4 GB+</summary>
+
+```jsonc
+"ConnectionLimit":    { "Enabled": true, "MaxPerClientIp": 100, "MaxTotal": 5000 },
+"Connection":         { "BufferSizeBytes": 65536, "Backlog": 2048 },
+"DnsCacheMaxEntries": 50000
+```
+
+</details>
+
 其他建议：
 
-- 用 systemd 管理进程并设置 `MemoryMax`（如 `MemoryMax=512M`）作为兜底
+- 用 systemd 管理进程并设置 `MemoryMax` 作为兜底（见上表）
 - `IdleTimeoutMs` 不宜过大，及时回收空闲连接
 - 日志级别保持 `Information`，避免在高频路径开启 `Debug`
+- 转发为异步 I/O 密集，多核主要在高连接数场景下更有优势
 
 ## 安全建议
 

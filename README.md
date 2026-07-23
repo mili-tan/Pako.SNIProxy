@@ -218,7 +218,7 @@ Defaults are conservative and tuned for a low-spec VPS. Runtime memory mainly co
 
 | Concern | Default | Notes |
 |---------|---------|-------|
-| Per-connection buffer | `BufferSizeBytes=16384` | ~`2 × BufferSizeBytes` per connection (one buffer per direction). Raise to 32768/65536 for throughput, at the cost of memory |
+| Per-connection buffer | `BufferSizeBytes=16384` (16 KB) | ~32 KB per connection (2 × 16 KB, one buffer per direction). Raise to 32768 (32 KB) / 65536 (64 KB) for throughput, at the cost of memory |
 | Max connections | `MaxTotal=1000` | Each connection also uses 2 sockets + an idle watchdog timer |
 | Per-IP connections | `MaxPerClientIp=50` | Prevents a single client from exhausting resources |
 | DNS cache | `DnsCacheMaxEntries=10000` | Bounded; evicted by expiry when exceeded — no unbounded growth |
@@ -235,11 +235,11 @@ On top of that, budget ~80–120 MB for the .NET runtime, the DNS cache, and SQL
 
 ### Recommended presets
 
-| Spec | MaxPerClientIp | MaxTotal | BufferSizeBytes | Backlog | DnsCacheMaxEntries | systemd `MemoryMax` |
-|------|---------------|----------|-----------------|---------|--------------------|---------------------|
-| **1C1G** | 30 | 500 | 16384 | 512 | 5000 | 512M |
-| **2C2G** | 50 | 1500 | 32768 | 1024 | 10000 | 1G |
-| **2C4G+** | 100 | 5000 | 65536 | 2048 | 50000 | 2G |
+| Spec | MaxPerClientIp | MaxTotal | BufferSizeBytes | Backlog | DnsCacheMaxEntries | Buffer memory | systemd `MemoryMax` |
+|------|---------------|----------|-----------------|---------|--------------------|---------------|---------------------|
+| **1C1G** | 30 | 500 | 16384 (16 KB) | 512 | 5000 | ~16 MB | 512M |
+| **2C2G** | 50 | 1500 | 32768 (32 KB) | 1024 | 10000 | ~94 MB | 1G |
+| **2C4G+** | 100 | 5000 | 65536 (64 KB) | 2048 | 50000 | ~625 MB | 2G |
 
 <details>
 <summary><b>1C1G</b> — 1 CPU / 1 GB</summary>

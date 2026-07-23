@@ -217,7 +217,7 @@ nft add rule ip nat output tcp dport 443 redirect to :8443
 
 | 关注点 | 默认 | 说明 |
 |--------|------|------|
-| 每连接缓冲区 | `BufferSizeBytes=16384` | 每连接约 `2 × BufferSizeBytes`（每个方向一个缓冲区）。提高吞吐可调到 32768/65536，但内存随之上升 |
+| 每连接缓冲区 | `BufferSizeBytes=16384`（16 KB） | 每连接约 32 KB（2 × 16 KB，每个方向一个缓冲区）。提高吞吐可调到 32768（32 KB）/ 65536（64 KB），但内存随之上升 |
 | 最大连接数 | `MaxTotal=1000` | 每连接还占用 2 个 socket + 一个空闲看门狗定时器 |
 | 单 IP 连接数 | `MaxPerClientIp=50` | 防止单客户端耗尽资源 |
 | DNS 缓存 | `DnsCacheMaxEntries=10000` | 有界，超出按过期时间淘汰，避免无限增长 |
@@ -234,11 +234,11 @@ nft add rule ip nat output tcp dport 443 redirect to :8443
 
 ### 推荐配置参考
 
-| 规格 | MaxPerClientIp | MaxTotal | BufferSizeBytes | Backlog | DnsCacheMaxEntries | systemd `MemoryMax` |
-|------|---------------|----------|-----------------|---------|--------------------|---------------------|
-| **1C1G** | 30 | 500 | 16384 | 512 | 5000 | 512M |
-| **2C2G** | 50 | 1500 | 32768 | 1024 | 10000 | 1G |
-| **2C4G+** | 100 | 5000 | 65536 | 2048 | 50000 | 2G |
+| 规格 | MaxPerClientIp | MaxTotal | BufferSizeBytes | Backlog | DnsCacheMaxEntries | 缓冲区内存 | systemd `MemoryMax` |
+|------|---------------|----------|-----------------|---------|--------------------|-----------|---------------------|
+| **1C1G** | 30 | 500 | 16384（16 KB） | 512 | 5000 | ~16 MB | 512M |
+| **2C2G** | 50 | 1500 | 32768（32 KB） | 1024 | 10000 | ~94 MB | 1G |
+| **2C4G+** | 100 | 5000 | 65536（64 KB） | 2048 | 50000 | ~625 MB | 2G |
 
 <details>
 <summary><b>1C1G</b> — 1 核 / 1 GB</summary>

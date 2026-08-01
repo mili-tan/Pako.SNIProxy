@@ -2,65 +2,53 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-A high-performance, production-ready **SNI transparent proxy** written in C# (.NET 10). It operates at the TLS handshake layer, parsing the SNI field from the ClientHello to route traffic. It **never decrypts or terminates TLS**, preserving end-to-end encryption and certificate validation.
+A high-performance, production-ready **SNI transparent proxy** written in C# (.NET 10). It operates at the TLS handshake layer, parsing the SNI field from the ClientHello to route traffic. **It never decrypts or terminates TLS**, preserving end-to-end encryption and certificate validation.
 
-## Features
+---
 
-- **SNI transparent proxy**: parses the SNI from the TLS ClientHello, connects directly to the origin, and relays encrypted traffic bidirectionally
-- **Automatic domain resolution**: supports system DNS / custom UDP DNS / DoH (DNS over HTTPS), with TTL caching
-- **Per-site DNS**: different sites can use different DNS servers (e.g. internal DNS for intranet, DoH for external)
-- **Pinned IP**: a site can skip DNS resolution and connect directly to a fixed `IP:Port`
-- **Site whitelist / allow-all**: whitelist mode by default, with wildcard support (`*.example.com`)
-- **Client authentication**: IP / CIDR whitelist (powered by [IPNetwork2](https://github.com/lduchosal/ipnetwork)); allows any IP by default
-- **Per-client policy**: override rate limit and traffic quota for a single IP / subnet; unmatched clients fall back to the global defaults
-- **Rate limiting**: token-bucket algorithm, per client IP
-- **Concurrent connection limits**: per client IP and global total
-- **Traffic quota**: daily / monthly per-client traffic caps, persisted in SQLite
-- **Management REST API**: view status, add/remove whitelist & client policies, query traffic, and force-disconnect at runtime
-- **Low-memory friendly**: bounded DNS cache, idle-counter eviction, SQLite WAL checkpointing — suitable for a 1C1G VPS
+## Highlights
+
+- End-to-end encryption – TLS traffic is forwarded untouched; the origin's certificate is validated directly by the client.
+- High performance – Async I/O, bounded caches, and a token-bucket rate limiter keep latency low even under load.
+- Smart routing – Per‑site DNS policies (UDP/DoH), pinned IPs, and wildcard domain matching (`*.example.com`).
+- Built‑in protection – IP/CIDR whitelist, per‑client rate limiting, connection limits, and daily/monthly traffic quotas with SQLite persistence.
+- Runtime management – REST API to view stats, modify whitelists, adjust client policies, and force‑disconnect connections.
+- Low‑memory friendly – Designed for a 1C1G VPS; memory usage is bounded and tunable.
+
+---
+
+## Quick Start
+
+```bash
+git clone ...
+cd Pako.SNIProxy
+dotnet build -c Release
+dotnet run -c Release
+```
+
+By default, the proxy listens on port `443` (requires root or `CAP_NET_BIND_SERVICE`) and the management API on `127.0.0.1:9090`.
+
+Configuration is in `appsettings.json` under the `SniProxy` section.
+
+---
 
 ## How It Works
 
 ```
-Client TCP connection
-  ├─ [1] Client auth (IP/CIDR)              fail → close
-  ├─ [2] Concurrent connection check        over limit → close
-  ├─ [3] Traffic quota check (day/month)    over limit → close
-  ├─ [4] Read TLS ClientHello, parse SNI    fail → close
-  ├─ [5] Site routing decision
-  │       ├─ PinnedEndpoint matched → connect to fixed IP
-  │       ├─ Whitelist mode, no match → reject
-  │       └─ Rule matched / AllowAll → use the corresponding DNS config
-  ├─ [6] DNS resolve (cache → configured DNS)  fail → close
-  ├─ [7] Connect to origin (port 443)       fail → close
-  ├─ [8] Forward the already-read ClientHello
-  └─ [9] Bidirectional relay (via rate limiter + traffic meter)
-                                            either side closes/times out → close both
+Client → [Auth check] → [Connection limit] → [Quota check]
+       → [Parse SNI from ClientHello]
+       → [Route by domain: pinned IP or DNS (cache → resolver)]
+       → [Connect to origin and forward original ClientHello]
+       → [Bidirectional relay with rate limiting & traffic metering]
 ```
 
-Because the proxy only forwards encrypted bytes, the client validates the **origin's real certificate** — certificate verification works normally (no need to skip validation).
+Because the proxy only forwards raw TLS bytes, the client receives the **real certificate** from the origin – no certificate spoofing or validation bypass is needed.
 
-## Requirements
+---
 
-- .NET 10 SDK
-- Linux (recommended) / Windows
-- Listening on port 443 requires root / CAP_NET_BIND_SERVICE
+## Detailed Configuration Reference
 
-## Build & Run
-
-```bash
-cd Pako.SNIProxy
-dotnet build -c Release
-dotnet run -c Release
-# or publish a standalone executable
-dotnet publish -c Release -r linux-x64 --self-contained false -o ./publish
-```
-
-By default it listens on `443` (SNI proxy) and `127.0.0.1:9090` (management API).
-
-## Configuration (appsettings.json)
-
-All settings live under the `SniProxy` section.
+All settings live under the `SniProxy` section in `appsettings.json`. The following tables describe each field with default values and descriptions. For per‑site and per‑client rules, see the examples below.
 
 ### Basics
 
@@ -95,7 +83,7 @@ Matched in order; the first match wins.
 ```
 
 - `Pattern`: exact domain or wildcard `*.example.com` (matches subdomains, not `example.com` itself)
-- `Dns`: site-specific DNS (omitted → uses global `Dns`)
+- `Dns`: site‑specific DNS (omitted → uses global `Dns`)
 - `PinnedEndpoint`: pinned `IP:Port`, skips DNS resolution
 
 ### Client Authentication (`ClientAuth`)
@@ -115,7 +103,7 @@ Matched in order; the first match wins.
 "TrafficQuota":    { "Enabled": true, "DailyLimitBytes": 10737418240, "MonthlyLimitBytes": 214748364800, "PersistPath": "./data/traffic.db" }
 ```
 
-### Per-Client Policy (`ClientRules`)
+### Per‑Client Policy (`ClientRules`)
 
 Override rate limit and quota for a single IP / subnet. **Matched in order; the first match wins.** Unmatched clients use the global defaults above. Fields left unset within a rule also fall back to the global defaults.
 
@@ -137,7 +125,7 @@ Override rate limit and quota for a single IP / subnet. **Matched in order; the 
 - `RateLimit`: omitted → uses global; `Enabled:false` → no rate limit for this client
 - `TrafficQuota`: `Enabled` / `DailyLimitBytes` / `MonthlyLimitBytes` are all optional; omitted fields fall back to global
 
-> Use `GET /api/client-rules/resolve?ip=<ip>` to see the effective policy for any IP (including fallback results).
+Use `GET /api/client-rules/resolve?ip=<ip>` to see the effective policy for any IP (including fallback results).
 
 ### Management API (`ManagementApi`)
 
@@ -145,7 +133,7 @@ Override rate limit and quota for a single IP / subnet. **Matched in order; the 
 "ManagementApi": { "Enabled": true, "ListenPort": 9090, "ListenAddress": "127.0.0.1", "AuthToken": "change-me-to-a-strong-secret" }
 ```
 
-> In production, always change `AuthToken` and keep `ListenAddress` loopback-only (or restrict access via firewall).
+In production, always change `AuthToken` and keep `ListenAddress` loopback‑only (or restrict access via firewall).
 
 ### Connection Settings (`Connection`)
 
@@ -157,6 +145,8 @@ Override rate limit and quota for a single IP / subnet. **Matched in order; the 
 | `BufferSizeBytes` | `16384` | Relay buffer per direction (larger = more throughput, more memory) |
 | `Backlog` | `1024` | Listen backlog |
 
+---
+
 ## Management API
 
 All endpoints require `Authorization: Bearer <AuthToken>`.
@@ -164,24 +154,23 @@ All endpoints require `Authorization: Bearer <AuthToken>`.
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/status` | GET | Runtime status, connection counts, memory, uptime |
-| `/api/whitelist/sites` | GET/POST | Query / add-or-update site whitelist |
+| `/api/whitelist/sites` | GET/POST | Query / add‑or‑update site whitelist |
 | `/api/whitelist/sites/{pattern}` | DELETE | Remove a site rule |
 | `/api/whitelist/clients` | GET/POST | Query / add client whitelist |
 | `/api/whitelist/clients/{entry}` | DELETE | Remove a client whitelist entry |
 | `/api/whitelist/clients/allow-all` | PUT | Set `{"allowAll":true/false}` |
-| `/api/client-rules` | GET/POST | Query / add-or-update client policies |
+| `/api/client-rules` | GET/POST | Query / add‑or‑update client policies |
 | `/api/client-rules/{pattern}` | DELETE | Remove a client policy |
 | `/api/client-rules/resolve?ip=` | GET | Effective policy for an IP (with fallback) |
-| `/api/traffic` | GET | Per-client traffic statistics |
+| `/api/traffic` | GET | Per‑client traffic statistics |
 | `/api/traffic?ip=` | GET | Daily/monthly traffic for a specific IP |
 | `/api/traffic/reset?ip=` | POST | Reset traffic counters for an IP |
 | `/api/connections` | GET | Current active connections |
-| `/api/connections/{id}` | DELETE | Force-disconnect a connection |
+| `/api/connections/{id}` | DELETE | Force‑disconnect a connection |
 | `/api/config/route-mode` | GET/PUT | Query / switch route mode |
 | `/api/dns/cache` | GET/DELETE | Query / clear the DNS cache |
 
 Example:
-
 ```bash
 TOKEN="your-secret"
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9090/api/status
@@ -189,57 +178,42 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
      -d '{"pattern":"*.example.com"}' http://127.0.0.1:9090/api/whitelist/sites
 ```
 
+---
+
 ## Transparent Proxy Deployment
 
-The SNI proxy itself only routes by SNI; you need a network-layer mechanism to steer target traffic into the proxy port.
+To steer traffic into the proxy, you need network‑layer redirection:
 
-### Option 1: DNS hijacking (gateway / router)
+- **DNS hijacking** – resolve whitelisted domains to the proxy's IP.
+- **iptables / nftables** – redirect outbound port 443 to the proxy's listening port.
+  ```bash
+  iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443
+  ```
 
-Point clients' DNS at a local DNS service (e.g. dnsmasq) that resolves whitelisted domains to the proxy IP. Client traffic then naturally reaches the proxy's port 443.
+If the proxy listens on port 443 directly, no redirection is needed (but requires root privileges).
 
-### Option 2: iptables redirect (local transparent proxy)
-
-```bash
-# Redirect outbound 443 traffic to local 8443 (when the proxy listens on 8443)
-iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443
-```
-
-### Option 3: nftables
-
-```bash
-nft add rule ip nat output tcp dport 443 redirect to :8443
-```
-
-> Note: the proxy's listen port must match the redirect target. If the proxy listens on 443 directly, no redirect is needed (requires root).
+---
 
 ## Performance & Memory Tuning
 
-Defaults are conservative and tuned for a low-spec VPS. Runtime memory mainly comes from four sources: per-connection relay buffers, the DNS cache, traffic counters, and SQLite.
+Defaults are conservative and suit a 1C1G VPS. The main memory consumers are:
 
-| Concern | Default | Notes |
-|---------|---------|-------|
-| Per-connection buffer | `BufferSizeBytes=16384` (16 KB) | ~32 KB per connection (2 × 16 KB, one buffer per direction). Raise to 32768 (32 KB) / 65536 (64 KB) for throughput, at the cost of memory |
-| Max connections | `MaxTotal=1000` | Each connection also uses 2 sockets + an idle watchdog timer |
-| Per-IP connections | `MaxPerClientIp=50` | Prevents a single client from exhausting resources |
-| DNS cache | `DnsCacheMaxEntries=10000` | Bounded; evicted by expiry when exceeded — no unbounded growth |
-| Traffic counters | Auto-eviction | Client counters idle for >1h are removed from memory after flushing |
-| SQLite | WAL + periodic checkpoint | `wal_checkpoint(TRUNCATE)` every 10 min + cleanup of records older than 60 days |
+- Relay buffers – about `MaxTotal × 2 × BufferSizeBytes`
+- DNS cache – bounded by `DnsCacheMaxEntries`
+- Traffic counters and SQLite – auto‑eviction and periodic cleanup
 
-**Memory rule of thumb:**
+**Recommended presets:**
 
-```
-buffer memory ≈ MaxTotal × 2 × BufferSizeBytes
-```
+| Spec | `MaxPerClientIp` | `MaxTotal` | `BufferSizeBytes` | `Backlog` | `DnsCacheMaxEntries` | Buffer memory | systemd `MemoryMax` |
+|------|------------------|------------|-------------------|-----------|----------------------|---------------|----------------------|
+| 1C1G | 30               | 500        | 16384             | 512       | 5000                 | ~16 MB        | 512M                 |
+| 2C2G | 50               | 1500       | 32768             | 1024      | 10000                | ~94 MB        | 1G                   |
+| 2C4G+ | 100             | 5000       | 65536             | 2048      | 50000                | ~625 MB       | 2G                   |
 
-On top of that, budget ~80–120 MB for the .NET runtime, the DNS cache, and SQLite. Use the sum to size `MemoryMax`.
-
-### Recommended presets
-
-| Spec | MaxPerClientIp | MaxTotal | BufferSizeBytes | Backlog | DnsCacheMaxEntries | Buffer memory | systemd `MemoryMax` |
-|------|---------------|----------|-----------------|---------|--------------------|---------------|---------------------|
-| **1C1G** | 30 | 500 | 16384 (16 KB) | 512 | 5000 | ~16 MB | 512M |
-| **2C2G** | 50 | 1500 | 32768 (32 KB) | 1024 | 10000 | ~94 MB | 1G |
-| **2C4G+** | 100 | 5000 | 65536 (64 KB) | 2048 | 50000 | ~625 MB | 2G |
+- Manage the process with systemd and set `MemoryMax` as a safety net (see presets above).
+- Keep `IdleTimeoutMs` reasonable to reclaim idle connections promptly.
+- Keep the log level at `Information`; avoid enabling `Debug` on the hot path.
+- The relay is async/I‑O bound, so extra cores help mainly under very high connection counts.
 
 <details>
 <summary><b>1C1G</b> — 1 CPU / 1 GB</summary>
@@ -274,36 +248,34 @@ On top of that, budget ~80–120 MB for the .NET runtime, the DNS cache, and SQL
 
 </details>
 
-Additional tips:
-
-- Manage the process with systemd and set `MemoryMax` as a safety net (see presets above)
-- Keep `IdleTimeoutMs` reasonable to reclaim idle connections promptly
-- Keep the log level at `Information`; avoid enabling `Debug` on the hot path
-- The relay is async/I-O bound, so extra cores help mainly under very high connection counts
+---
 
 ## Security Recommendations
 
-- Change `ManagementApi.AuthToken` to a strong random value; bind the management port to loopback only
-- For public deployments, set `ClientAuth.AllowAll=false` and configure a whitelist
-- Enable rate limiting and traffic quotas as needed to prevent abuse
-- Pinned IPs (`PinnedEndpoint`) can bypass DNS poisoning, but you must maintain IP validity yourself
+- Change `ManagementApi.AuthToken` to a strong random value; bind the management port to loopback only.
+- For public deployments, set `ClientAuth.AllowAll=false` and configure a whitelist.
+- Enable rate limiting and traffic quotas as needed to prevent abuse.
+- Pinned IPs (`PinnedEndpoint`) can bypass DNS poisoning, but you must maintain IP validity yourself.
+
+---
 
 ## Project Structure
 
 ```
 Pako.SNIProxy/
-├── Program.cs                  # Entry point, DI orchestration, Kestrel (management API)
-├── appsettings.json            # Configuration
-├── Configuration/              # Strongly-typed options + validation
-├── Core/                       # SNI parsing, connection relay, listener service, connection context
-├── Dns/                        # ARSoft.Tools.Net resolvers, cache, per-rule isolation
-├── Routing/                    # Site routing, wildcard matching
-├── Auth/                       # Client auth (IP/CIDR), per-client policy resolution
-├── Throttling/                 # Token-bucket rate limit, connection limit, traffic quota
+├── Program.cs                  # Entry, DI, Kestrel host
+├── Configuration/              # Strongly‑typed options + validation
+├── Core/                       # SNI parsing, relay, listener, connection context
+├── Dns/                        # ARSoft resolvers, cache, per‑rule isolation
+├── Routing/                    # Site matching, wildcard
+├── Auth/                       # IP/CIDR auth, policy resolution
+├── Throttling/                 # Rate limiter, connection limit, quota
 ├── Persistence/                # SQLite traffic storage
-├── Api/                        # Management REST API + auth middleware
+├── Api/                        # REST API + auth middleware
 └── Infrastructure/             # IP utilities, connection registry
 ```
+
+---
 
 ## Dependencies
 
@@ -312,6 +284,8 @@ Pako.SNIProxy/
 | [ARSoft.Tools.Net](https://github.com/alexreinert/ARSoft.Tools.Net) | DNS client (UDP/TCP/DoH) |
 | [IPNetwork2](https://github.com/lduchosal/ipnetwork) | IP/CIDR matching |
 | Microsoft.Data.Sqlite | Traffic persistence |
+
+---
 
 ## License
 
